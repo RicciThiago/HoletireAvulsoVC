@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Holerites Avulsos</title>
+    
+    <!-- Tailwind CSS para o visual moderno do App -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel para ler JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Módulos React e Ícones -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.2.0",
+          "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+          "lucide-react": "https://esm.sh/lucide-react@0.292.0?external=react"
+        }
+      }
+    </script>
+
+    <style>
+        /* Estilos de Impressão (A4) - Mantém o padrão Excel intacto */
+        @media print {
+            @page { size: A4 portrait; margin: 10mm; }
+            body { background-color: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .print\:hidden { display: none !important; }
+            .print\:shadow-none { box-shadow: none !important; }
+            .print\:p-0 { padding: 0 !important; }
+            .print\:m-0 { margin: 0 !important; }
+            .break-inside-avoid { break-inside: avoid; }
+            ::-webkit-scrollbar { display: none; }
+        }
+        
+        /* Animação suave para os Toasts (Notificações) */
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .toast-enter { animation: slideIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+          FileText, History, Printer, Plus, Trash2, Save, 
+          Building2, ArrowLeft, Users, Edit, Download, 
+          Database, Loader2, Scissors, Calculator, Upload,
+          CheckCircle, AlertCircle, Info, ExternalLink
+        } from 'lucide-react';
+
+        // SEU LINK DA PLANILHA GOOGLE
+        const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbysgzIkLhzn8rH9GtdcZlBx3EIhaLqO4FcsC4poP4NcszQ4SEI-yJ7K1qwK0VJZDQI/exec";
+
+        // --- Helpers ---
+        // Converte string com vírgula para float matemático (Ex: "1.500,50" -> 1500.50)
+        const parseBrFloat = (val) => {
+            if (typeof val === 'number') return val;
+            if (!val) return 0;
+            const str = String(val).replace(/\./g, '').replace(',', '.');
+            return parseFloat(str) || 0;
+        };
+
+        const formatCurrency = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+        const getToday = () => new Date().toISOString().split('T')[0];
+
+        // --- Componente de Notificação (Toast) ---
+        const Toast = ({ msg, type, onClose }) => {
+            const colors = {
+                success: 'bg-emerald-100 border-emerald-500 text-emerald-800',
+                error: 'bg-red-100 border-red-500 text-red-800',
+                info: 'bg-blue-100 border-blue-500 text-blue-800'
+            };
+            const Icon = type === 'success' ? CheckCircle : (type === 'error' ? AlertCircle : Info);
+
+            useEffect(() => {
+                const timer = setTimeout(onClose, 4000);
+                return () => clearTimeout(timer);
+            }, [onClose]);
+
+            return (
+                <div className={`fixed top-6 right-6 flex items-center gap-3 px-4 py-3 rounded-lg border-l-4 shadow-lg toast-enter z-50 ${colors[type]}`}>
+                    <Icon className="w-5 h-5" />
+                    <span className="font-semibold text-sm">{msg}</span>
+                </div>
+            );
+        };
+
+        function App() {
+          const [activeTab, setActiveTab] = useState('form');
+          const [isLoading, setIsLoading] = useState(true);
+          const [syncStatus, setSyncStatus] = useState('Sincronizando...');
+          const [toast, setToast] = useState(null);
+          
+          const fileInputRef = useRef(null);
+
+          const showToast = (msg, type = 'success') => setToast({ msg, type });
+
+          // Bancos de Dados
+          const [companies, setCompanies] = useState([]);
+          const [employees, setEmployees] = useState([]);
+          const [history, setHistory] = useState([]);
+          const [rubricsE, setRubricsE] = useState([]);
+          const [rubricsD, setRubricsD] = useState([]);
+
+          // Estados dos Formulários Base
+          const [compForm, setCompForm] = useState({ id: '', cnpj: '', name: '' });
+          const [empForm, setEmpForm] = useState({ id: '', companyId: '', name: '', cpf: '', role: '' });
+
+          // Estado do Formulário de Emissão (Verbas vazias por padrão)
+          const [formData, setFormData] = useState({
+            id: '', issueDate: getToday(), referenceMonth: '',
+            companyId: '', companyName: '', companyCnpj: '',
+            employeeId: '', employeeName: '', employeeCpf: '', employeeRole: '',
+            includeNumber: true, payslipNumber: '',
+            
+            footerInss: true, inssPercent: '',
+            footerFgts: true, fgtsPercent: '', // FGTS em branco por padrão
+            footerIrrf: true, irrfPercent: '',
+
+            earnings: [{ id: generateId(), description: '', reference: '', amount: '' }],
+            deductions: [{ id: generateId(), description: '', reference: '', amount: '' }]
+          });
+
+          // --- CARREGAMENTO INICIAL ---
+          useEffect(() => {
+            fetch(GOOGLE_SHEET_URL).then(res => res.json()).then(data => {
+              if(data.companies) setCompanies(data.companies);
+              if(data.employees) setEmployees(data.employees);
+              if(data.earningsRubrics) setRubricsE(data.earningsRubrics);
+              if(data.deductionsRubrics) setRubricsD(data.deductionsRubrics);
+              if(data.payslips) setHistory(data.payslips.sort((a,b) => new Date(b.issueDate) - new Date(a.issueDate)));
+              setIsLoading(false);
+              setSyncStatus('Sincronizado c/ Folha');
+            }).catch(e => { 
+              console.error(e); 
+              setIsLoading(false); 
+              setSyncStatus('Erro de Sincronização');
+              showToast('Falha ao conectar com o Google Sheets.', 'error');
+            });
+          }, []);
+
+          // --- AUTO-NUMERAÇÃO ---
+          useEffect(() => {
+            if(!formData.id && !isLoading) {
+              const year = new Date(formData.issueDate).getFullYear();
+              const slipsThisYear = history.filter(h => h.payslipNumber?.endsWith(`-${year}`));
+              let max = 0;
+              slipsThisYear.forEach(s => {
+                if(s.payslipNumber) {
+                    const n = parseInt(s.payslipNumber.split('-')[0]);
+                    if(!isNaN(n) && n > max) max = n;
+                }
+              });
+              setFormData(p => ({...p, payslipNumber: `${String(max+1).padStart(3, '0')}-${year}`}));
+            }
+          }, [history, formData.issueDate, isLoading]);
+
+          // --- CÁLCULOS LÍQUIDOS E AUTOMÁTICOS ---
+          const gross = useMemo(() => formData.earnings.reduce((a, c) => a + parseBrFloat(c.amount), 0), [formData.earnings]);
+          
+          const autoInssAmount = useMemo(() => formData.footerInss && formData.inssPercent ? gross * (parseBrFloat(formData.inssPercent) / 100) : 0, [formData.footerInss, formData.inssPercent, gross]);
+          const autoIrrfAmount = useMemo(() => formData.footerIrrf && formData.irrfPercent ? gross * (parseBrFloat(formData.irrfPercent) / 100) : 0, [formData.footerIrrf, formData.irrfPercent, gross]);
+          const autoFgtsAmount = useMemo(() => formData.footerFgts && formData.fgtsPercent ? gross * (parseBrFloat(formData.fgtsPercent) / 100) : 0, [formData.footerFgts, formData.fgtsPercent, gross]);
+
+          // Une os descontos manuais aos automáticos (INSS/IRRF) garantindo nome limpo para impressão
+          const allDeductions = useMemo(() => {
+              let list = [...formData.deductions.filter(d => d.description || d.amount)];
+              if (formData.footerInss && formData.inssPercent) {
+                  // Passamos a descrição limpa "INSS" para constar corretamente na impressão
+                  list.push({ id: 'auto-inss', description: 'INSS', reference: `${formData.inssPercent}%`, amount: autoInssAmount });
+              }
+              if (formData.footerIrrf && formData.irrfPercent) {
+                  // Passamos a descrição limpa "IRRF" para constar corretamente na impressão
+                  list.push({ id: 'auto-irrf', description: 'IRRF', reference: `${formData.irrfPercent}%`, amount: autoIrrfAmount });
+              }
+              return list;
+          }, [formData.deductions, formData.footerInss, formData.inssPercent, autoInssAmount, formData.footerIrrf, formData.irrfPercent, autoIrrfAmount]);
+
+          const totals = useMemo(() => {
+            const totalDeductions = allDeductions.reduce((a, c) => a + parseBrFloat(c.amount), 0);
+            return { gross: gross, deductions: totalDeductions, net: gross - totalDeductions };
+          }, [gross, allDeductions]);
+
+          // --- COMUNICAÇÃO COM O GOOGLE (HELPER) ---
+          const syncToGoogle = async (action, data, successMsg) => {
+             setSyncStatus('Salvando...');
+             try {
+                await fetch(GOOGLE_SHEET_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ action, data }) });
+                setSyncStatus('Sincronizado c/ Folha');
+                if(successMsg) showToast(successMsg, 'success');
+             } catch(err) {
+                setSyncStatus('Erro ao Salvar');
+                showToast('Erro ao salvar na planilha.', 'error');
+             }
+          };
+
+          // --- OPERAÇÕES DE EMPRESA E FUNCIONÁRIOS ---
+          const saveCompany = () => {
+            if (!compForm.name || !compForm.cnpj) {
+                showToast("Preencha Razão Social e CNPJ/CPF.", "error");
+                return;
+            }
+            const isEdit = !!compForm.id;
+            const newCompany = { ...compForm, name: compForm.name.toUpperCase(), id: compForm.id || generateId() };
+            
+            setCompanies(prev => {
+              if (isEdit) return prev.map(c => c.id === newCompany.id ? newCompany : c);
+              return [...prev, newCompany];
+            });
+            
+            syncToGoogle('save_company', newCompany, isEdit ? 'Empresa atualizada!' : 'Empresa cadastrada!');
+            setCompForm({ id: '', cnpj: '', name: '' });
+          };
+
+          const deleteCompany = (id) => {
+            if(window.confirm("Tem certeza que deseja excluir esta empresa?")) {
+              setCompanies(prev => prev.filter(c => c.id !== id));
+              syncToGoogle('delete_company', {id}, 'Empresa excluída!');
+            }
+          };
+
+          const handleImportCompaniesCSV = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+              try {
+                const text = event.target.result;
+                const rows = text.split(/\r?\n/);
+                let newComps = [];
+                let count = 0;
+
+                for (let i = 0; i < rows.length; i++) {
+                  const row = rows[i].trim();
+                  if (!row) continue;
+                  
+                  const separator = row.includes(';') ? ';' : ',';
+                  const cols = row.split(separator).map(c => c.replace(/['"]/g, '').trim());
+
+                  // Pula a primeira linha se for um cabeçalho
+                  if (i === 0 && cols[0].toLowerCase().includes('cnpj')) continue;
+
+                  if (cols.length >= 2) {
+                    let cnpj = cols[0];
+                    let name = cols[1].toUpperCase();
+
+                    // Se a coluna 1 for o nome e a 2 o CNPJ, inverte automaticamente
+                    if (/[A-Z]/i.test(cnpj) && !/[A-Z]/i.test(name)) {
+                        cnpj = cols[1];
+                        name = cols[0].toUpperCase();
+                    }
+
+                    if (name && cnpj) {
+                      newComps.push({ id: generateId() + '-' + count, cnpj: cnpj, name: name });
+                      count++;
+                    }
+                  }
+                }
+
+                if (count > 0) {
+                  // 1. Salva TODAS na tela instantaneamente para não travar
+                  setCompanies(prev => [...prev, ...newComps]);
+                  showToast(`${count} empresas importadas com sucesso!`, 'success');
+
+                  // 2. Envia para o Google aos poucos (em background) para não derrubar o navegador
+                  setSyncStatus(`Salvando ${count} empresas...`);
+                  for (const comp of newComps) {
+                    fetch(GOOGLE_SHEET_URL, { 
+                        method: 'POST', 
+                        mode: 'no-cors', 
+                        body: JSON.stringify({ action: 'save_company', data: comp }) 
+                    }).catch(() => {});
+                    // Pausa de 150ms entre cada empresa para não sobrecarregar
+                    await new Promise(res => setTimeout(res, 150));
+                  }
+                  setSyncStatus('Sincronizado c/ Folha');
+                } else {
+                  showToast('Não conseguimos ler as empresas. Verifique o formato do CSV.', 'error');
+                }
+              } catch (error) {
+                showToast('Erro ao importar CSV. Tente salvar como "CSV UTF-8" no Excel.', 'error');
+              } finally {
+                if(fileInputRef.current) fileInputRef.current.value = ''; 
+              }
+            };
+            // Usa ISO-8859-1 para ler a formatação nativa do Excel no Brasil com acentos
+            reader.readAsText(file, 'ISO-8859-1');
+          };
+
+          const saveEmployee = () => {
+            if (!empForm.name || !empForm.companyId) {
+                showToast("Preencha Nome e selecione a Empresa.", "error");
+                return;
+            }
+            const isEdit = !!empForm.id;
+            const newEmployee = { ...empForm, name: empForm.name.toUpperCase(), role: empForm.role.toUpperCase(), id: empForm.id || generateId() };
+
+            setEmployees(prev => {
+              if (isEdit) return prev.map(e => e.id === newEmployee.id ? newEmployee : e);
+              return [...prev, newEmployee];
+            });
+
+            syncToGoogle('save_employee', newEmployee, isEdit ? 'Funcionário atualizado!' : 'Funcionário cadastrado!');
+            setEmpForm({ id: '', companyId: '', name: '', cpf: '', role: '' });
+          };
+
+          const deleteEmployee = (id) => {
+            if(window.confirm("Tem certeza que deseja excluir este funcionário?")) {
+              setEmployees(prev => prev.filter(e => e.id !== id));
+              syncToGoogle('delete_employee', {id}, 'Funcionário excluído!');
+            }
+          };
+
+          // --- OPERAÇÕES DE HOLERITE ---
+          const handleSavePayslip = async () => {
+            if(!formData.companyId || !formData.employeeId) {
+                showToast("Selecione Empresa e Funcionário antes de emitir.", "error");
+                return;
+            }
+            if(formData.employeeId === 'avulso' && !formData.employeeName.trim()) {
+                showToast("Preencha o nome do trabalhador avulso.", "error");
+                return;
+            }
+            
+            // Salvamos apenas os dados essenciais. Os auto-descontos são reconstruídos ao abrir o histórico.
+            const toSave = { ...formData, id: formData.id || generateId(), totals };
+            setHistory(prev => [toSave, ...prev.filter(h => h.id !== toSave.id)]);
+            syncToGoogle('save_payslip', toSave, 'Holerite emitido com sucesso!');
+            setFormData(toSave);
+            setActiveTab('preview');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          };
+
+          const deletePayslip = (id) => {
+            if(window.confirm("Excluir este holerite do histórico e da folha de cálculo?")) {
+              setHistory(prev => prev.filter(p => p.id !== id));
+              syncToGoogle('delete_payslip', {id}, 'Holerite excluído!');
+            }
+          };
+
+          const exportToExcel = () => {
+            const headers = "Data,Nº Holerite,Empresa,CNPJ/CPF,Funcionário,CPF,Referência,Vencimentos (Bruto),Descontos,Líquido\n";
+            const rows = history.map(p => {
+              const num = p.includeNumber ? p.payslipNumber : '-';
+              return `${p.issueDate},"${num}","${p.companyName}",="${p.companyCnpj}","${p.employeeName}",="${p.employeeCpf}","${p.referenceMonth}",${p.totals?.gross || 0},${p.totals?.deductions || 0},${p.totals?.net || 0}`;
+            }).join("\n");
+            const blob = new Blob(["\uFEFF" + headers + rows], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `Holerites_Visao_Contabil_${getToday()}.csv`;
+            link.click();
+            showToast("Relatório exportado!", "info");
+          };
+
+          // --- COMPONENTES DA INTERFACE ---
+          const Sidebar = () => (
+            <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col print:hidden shadow-xl shrink-0 h-screen sticky top-0">
+              <div className="p-6 bg-slate-950 border-b border-slate-800">
+                <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                  <FileText className="w-6 h-6 text-blue-500" /> Holerites Avulsos
+                </h1>
+                <p className="text-[10px] text-slate-400 uppercase mt-1 tracking-wider font-semibold">Sistema Integrado</p>
+                <div className="mt-5 flex items-center gap-2 text-xs bg-slate-900 rounded-lg p-2.5 border border-slate-800 shadow-inner">
+                  {syncStatus === 'Salvando...' ? <Loader2 className="w-4 h-4 text-blue-400 animate-spin" /> : 
+                   <Database className={`w-4 h-4 ${syncStatus.includes('Erro') ? 'text-red-400' : 'text-emerald-400'}`} />}
+                  <span className="font-medium text-slate-300">{syncStatus}</span>
+                </div>
+              </div>
+              <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
+                <button onClick={() => { setActiveTab('form'); window.scrollTo(0,0); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'form' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-800 hover:text-white'}`}>
+                  <FileText className="w-5 h-5" /> Emitir Holerite
+                </button>
+                <button onClick={() => { setActiveTab('history'); window.scrollTo(0,0); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'history' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-800 hover:text-white'}`}>
+                  <History className="w-5 h-5" /> Histórico
+                </button>
+                
+                <div className="pt-6 pb-2">
+                    <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Cadastros Base</p>
+                </div>
+                <button onClick={() => { setActiveTab('companies'); window.scrollTo(0,0); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'companies' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-800 hover:text-white'}`}>
+                  <Building2 className="w-5 h-5" /> Empresas
+                </button>
+                <button onClick={() => { setActiveTab('employees'); window.scrollTo(0,0); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-all ${activeTab === 'employees' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-slate-800 hover:text-white'}`}>
+                  <Users className="w-5 h-5" /> Funcionários
+                </button>
+                
+                <div className="pt-6 pb-2">
+                    <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sistema</p>
+                </div>
+                <button onClick={() => window.open('https://sheets.google.com', '_blank')} className="w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-all">
+                  <ExternalLink className="w-5 h-5" /> Abrir Planilha Base
+                </button>
+              </nav>
+            </aside>
+          );
+
+          // Telas de Empresa e Funcionários
+          const renderCompanies = () => (
+            <div className="max-w-5xl mx-auto space-y-8 print:hidden animate-fade-in">
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-4">
+                  <Building2 className="w-6 h-6 text-blue-600" /> {compForm.id ? 'Editar Empresa' : 'Cadastrar Nova Empresa'}
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Razão Social / Nome</label>
+                    <input type="text" value={compForm.name} onChange={e => setCompForm({...compForm, name: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none uppercase transition-all" placeholder="Digite o nome da empresa" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">CNPJ / CPF</label>
+                    <input type="text" value={compForm.cnpj} onChange={e => setCompForm({...compForm, cnpj: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all" placeholder="00.000.000/0001-00" />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-50">
+                  {compForm.id && (
+                    <button onClick={() => setCompForm({id:'', name:'', cnpj:''})} className="px-6 py-3 text-slate-600 hover:bg-slate-100 font-bold rounded-xl transition-all">Cancelar Edição</button>
+                  )}
+                  <button onClick={saveCompany} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg">
+                    <Save className="w-5 h-5"/> Salvar Cadastro
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                  <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">Empresas Registradas <span className="bg-blue-100 text-blue-700 py-0.5 px-2.5 rounded-full text-xs">{companies.length}</span></h3>
+                  <div>
+                    <input type="file" accept=".csv" ref={fileInputRef} onChange={handleImportCompaniesCSV} className="hidden" />
+                    <button onClick={() => fileInputRef.current.click()} className="text-sm flex items-center gap-2 font-bold text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 px-4 py-2.5 rounded-xl transition-all border border-slate-200 hover:border-emerald-200">
+                      <Upload className="w-4 h-4" /> Importar CSV
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-100">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                        <th className="p-4">CNPJ / CPF</th>
+                        <th className="p-4">Razão Social / Nome</th>
+                        <th className="p-4 text-center w-24">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {companies.length === 0 ? (
+                        <tr><td colSpan="3" className="p-12 text-center text-slate-400 font-medium">Nenhuma empresa registrada. Cadastre acima ou importe via CSV.</td></tr>
+                      ) : companies.map(c => (
+                        <tr key={c.id} className="border-b border-slate-100 last:border-0 hover:bg-blue-50/50 transition-colors">
+                          <td className="p-4 text-sm font-medium text-slate-600">{c.cnpj}</td>
+                          <td className="p-4 text-sm text-slate-800 font-semibold">{c.name}</td>
+                          <td className="p-4 text-center flex justify-center gap-2">
+                            <button onClick={() => { setCompForm(c); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar"><Edit className="w-4 h-4"/></button>
+                            <button onClick={() => deleteCompany(c.id)} className="p-2 text-red-500 hover:bg-red-100 rounded-lg transition-colors" title="Excluir"><Trash2 className="w-4 h-4"/></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+
+          const renderEmployees = () => (
+            <div className="max-w-5xl mx-auto space-y-8 print:hidden animate-fade-in">
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-4">
+                  <Users className="w-6 h-6 text-blue-600" /> {empForm.id ? 'Editar Funcionário' : 'Cadastrar Novo Funcionário'}
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Empresa Vinculada</label>
+                    <select value={empForm.companyId} onChange={e => setEmpForm({...empForm, companyId: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all cursor-pointer font-medium">
+                      <option value="">Selecione a Empresa...</option>
+                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nome Completo</label>
+                    <input type="text" value={empForm.name} onChange={e => setEmpForm({...empForm, name: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none uppercase transition-all" placeholder="Nome do colaborador" />
+                  </div>
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">CPF (Opcional)</label>
+                    <input type="text" value={empForm.cpf} onChange={e => setEmpForm({...empForm, cpf: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all" placeholder="000.000.000-00" />
+                  </div>
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">CBO / Cargo (Opcional)</label>
+                    <input type="text" value={empForm.role} onChange={e => setEmpForm({...empForm, role: e.target.value})} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none uppercase transition-all" placeholder="Ex: Auxiliar Administrativo" />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-50">
+                  {empForm.id && (
+                    <button onClick={() => setEmpForm({id:'', companyId:'', name:'', cpf:'', role:''})} className="px-6 py-3 text-slate-600 hover:bg-slate-100 font-bold rounded-xl transition-all">Cancelar Edição</button>
+                  )}
+                  <button onClick={saveEmployee} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg">
+                    <Save className="w-5 h-5"/> Salvar Colaborador
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="font-bold text-slate-800 text-lg mb-6 border-b border-slate-100 pb-4 flex items-center gap-2">Funcionários Registrados <span className="bg-blue-100 text-blue-700 py-0.5 px-2.5 rounded-full text-xs">{employees.length}</span></h3>
+                <div className="overflow-x-auto rounded-xl border border-slate-100">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                        <th className="p-4">Nome</th>
+                        <th className="p-4">Cargo</th>
+                        <th className="p-4">Empresa Vinculada</th>
+                        <th className="p-4 text-center w-24">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employees.length === 0 ? (
+                        <tr><td colSpan="4" className="p-12 text-center text-slate-400 font-medium">Nenhum funcionário registrado.</td></tr>
+                      ) : employees.map(e => {
+                        const comp = companies.find(c => c.id === e.companyId);
+                        return (
+                          <tr key={e.id} className="border-b border-slate-100 last:border-0 hover:bg-blue-50/50 transition-colors">
+                            <td className="p-4 text-sm font-semibold text-slate-800">{e.name}</td>
+                            <td className="p-4 text-sm text-slate-600">{e.role || '-'}</td>
+                            <td className="p-4 text-sm text-slate-500 italic font-medium">{comp ? comp.name : 'Empresa Excluída'}</td>
+                            <td className="p-4 text-center flex justify-center gap-2">
+                              <button onClick={() => { setEmpForm(e); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar"><Edit className="w-4 h-4"/></button>
+                              <button onClick={() => deleteEmployee(e.id)} className="p-2 text-red-500 hover:bg-red-100 rounded-lg transition-colors" title="Excluir"><Trash2 className="w-4 h-4"/></button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+
+          // --- MODELO DE IMPRESSÃO ESTILO EXCEL (A4) ---
+          const ExcelPayslip = ({ type }) => {
+            // Procura nos vencimentos se há algum com a palavra "BASE" para jogar no rodapé. Senão, usa o bruto.
+            const baseEarning = formData.earnings.find(e => e.description && e.description.toUpperCase().includes('BASE'));
+            const salarioBase = baseEarning ? parseBrFloat(baseEarning.amount) : totals.gross;
+            
+            // Variáveis de checagem para omitir cabeçalhos dinamicamente se estiverem em branco
+            const hasRole = Boolean(formData.employeeRole && formData.employeeRole.trim() !== '');
+            const hasCpf = Boolean(formData.employeeCpf && formData.employeeCpf.trim() !== '');
+
+            return (
+              <div className="border-[1.5px] border-black p-0 bg-white text-black font-sans text-[11px] mb-4 break-inside-avoid">
+                {/* CABEÇALHO */}
+                <div className="flex border-b border-black">
+                  <div className="w-2/3 p-2 border-r border-black">
+                    <div className="font-bold text-sm uppercase">{formData.companyName || 'NOME DA EMPRESA'}</div>
+                    <div className="mt-1">CNPJ / CPF: {formData.companyCnpj || '00.000.000/0000-00'}</div>
+                  </div>
+                  <div className="w-1/3 p-2 text-right bg-gray-50 flex flex-col justify-center">
+                    <div className="font-bold uppercase">Recibo de Pagamento</div>
+                    <div className="mt-1">Ref: <span className="font-bold">{formData.referenceMonth || 'Mês/Ano'}</span></div>
+                    {formData.includeNumber && formData.payslipNumber && (
+                       <div className="text-[10px] font-bold mt-1">Nº {formData.payslipNumber}</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* FUNCIONÁRIO - CABEÇALHOS CONDICIONAIS */}
+                <div className="flex border-b border-black bg-gray-50/50 text-[9px]">
+                  <div className={`p-1 text-gray-700 flex-1 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>Nome do Funcionário</div>
+                  {hasRole && (
+                    <div className={`p-1 text-gray-700 w-[30%] ${hasCpf ? 'border-r border-black' : ''}`}>CBO / Cargo</div>
+                  )}
+                  {hasCpf && (
+                    <div className="p-1 text-gray-700 w-[20%]">CPF</div>
+                  )}
+                </div>
+                {/* FUNCIONÁRIO - VALORES CONDICIONAIS */}
+                <div className="flex border-b border-black font-bold">
+                  <div className={`p-1 uppercase flex-1 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeName || 'NOME DO FUNCIONÁRIO'}</div>
+                  {hasRole && (
+                    <div className={`p-1 uppercase w-[30%] ${hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeRole}</div>
+                  )}
+                  {hasCpf && (
+                    <div className="p-1 uppercase w-[20%]">{formData.employeeCpf}</div>
+                  )}
+                </div>
+
+                {/* TABELA DE VERBAS E DESCONTOS */}
+                <div className="flex border-b border-black font-bold text-center bg-gray-100 text-[10px]">
+                  <div className="w-[10%] p-1 border-r border-black">Cód.</div>
+                  <div className="w-[50%] p-1 border-r border-black text-left">Descrição</div>
+                  <div className="w-[10%] p-1 border-r border-black">Ref.</div>
+                  <div className="w-[15%] p-1 border-r border-black">Vencimentos</div>
+                  <div className="w-[15%] p-1">Descontos</div>
+                </div>
+
+                <div className="h-[140px] relative">
+                  {/* Vencimentos */}
+                  {formData.earnings.map((e,i) => {
+                    if(!e.description) return null;
+                    let desc = e.description;
+                    let code = (i+1).toString().padStart(3, '0');
+                    if(desc.includes(' - ')) {
+                       code = desc.split(' - ')[0];
+                       desc = desc.split(' - ').slice(1).join(' - ');
+                    }
+                    return (
+                      <div key={`e-${i}`} className="flex text-[10px]">
+                        <div className="w-[10%] px-1 border-r border-black text-center">{code}</div>
+                        <div className="w-[50%] px-1 border-r border-black uppercase">{desc}</div>
+                        <div className="w-[10%] px-1 border-r border-black text-center">{e.reference}</div>
+                        <div className="w-[15%] px-1 border-r border-black text-right">{formatCurrency(parseBrFloat(e.amount)).replace('R$', '')}</div>
+                        <div className="w-[15%] px-1"></div>
+                      </div>
+                    )
+                  })}
+                  {/* Descontos Manuais + Automáticos */}
+                  {allDeductions.map((d,i) => {
+                    if(!d.description) return null;
+                    let desc = d.description;
+                    let code = (i+50).toString().padStart(3, '0');
+                    
+                    // Garante que os automáticos tenham código padrão se não preenchido
+                    if (d.id === 'auto-inss') code = '060';
+                    if (d.id === 'auto-irrf') code = '061';
+
+                    if(desc.includes(' - ')) {
+                       code = desc.split(' - ')[0];
+                       desc = desc.split(' - ').slice(1).join(' - ');
+                    }
+                    return (
+                      <div key={`d-${i}`} className="flex text-[10px]">
+                        <div className="w-[10%] px-1 border-r border-black text-center">{code}</div>
+                        <div className="w-[50%] px-1 border-r border-black uppercase">{desc}</div>
+                        <div className="w-[10%] px-1 border-r border-black text-center">{d.reference}</div>
+                        <div className="w-[15%] px-1 border-r border-black"></div>
+                        <div className="w-[15%] px-1 text-right">{formatCurrency(parseBrFloat(d.amount)).replace('R$', '')}</div>
+                      </div>
+                    )
+                  })}
+                  
+                  {/* Linhas verticais fixas */}
+                  <div className="absolute top-0 left-[10%] bottom-0 w-[50%] border-l border-r border-black pointer-events-none"></div>
+                  <div className="absolute top-0 left-[70%] bottom-0 w-[15%] border-r border-black pointer-events-none"></div>
+                </div>
+
+                {/* TOTAIS */}
+                <div className="flex border-t border-black font-bold">
+                  <div className="w-[70%] p-1 border-r border-black text-right text-[10px] pt-2">Total de Vencimentos / Descontos</div>
+                  <div className="w-[15%] p-1 border-r border-black text-right pt-2 bg-gray-50">{formatCurrency(totals.gross).replace('R$', '')}</div>
+                  <div className="w-[15%] p-1 text-right pt-2 bg-gray-50">{formatCurrency(totals.deductions).replace('R$', '')}</div>
+                </div>
+
+                {/* MENSAGEM E LÍQUIDO */}
+                <div className="flex border-t border-black h-12">
+                  <div className="w-[70%] p-2 border-r border-black flex flex-col justify-center">
+                    <div className="text-[9px] text-gray-700">Mensagem:</div>
+                    <div className="text-xs italic font-semibold">{type === 'empresa' ? 'Via da Empresa' : 'Via do Funcionário'}</div>
+                  </div>
+                  <div className="w-[30%] flex flex-col">
+                     <div className="flex border-b border-black h-1/2 items-center bg-gray-100">
+                        <div className="w-1/2 p-1 text-[10px] font-bold">Valor Líquido ⇨</div>
+                        <div className="w-1/2 p-1 text-right font-bold text-sm">{formatCurrency(totals.net)}</div>
+                     </div>
+                     <div className="flex h-1/2 p-1 items-center justify-end">
+                         <span className="text-[8px] text-gray-500 px-1">Declaro ter recebido a importância líquida discriminada</span>
+                     </div>
+                  </div>
+                </div>
+
+                {/* BASES DE CÁLCULO (RODAPÉ CONFIGURÁVEL COM VÍRGULAS) */}
+                <div className="flex border-t border-black text-[9px] text-center bg-gray-50">
+                  <div className="flex-1 p-1 border-r border-black">
+                    <div className="text-gray-700">Salário Base</div>
+                    <div className="font-bold text-black mt-1">{formatCurrency(salarioBase)}</div>
+                  </div>
+                  <div className="flex-1 p-1 border-r border-black">
+                    <div className="text-gray-700">Base Cálc. INSS</div>
+                    <div className="font-bold text-black mt-1">{formData.footerInss ? formatCurrency(totals.gross) : '-'}</div>
+                  </div>
+                  <div className="flex-1 p-1 border-r border-black">
+                    <div className="text-gray-700">Base Cálc. FGTS</div>
+                    <div className="font-bold text-black mt-1">{formData.footerFgts ? formatCurrency(totals.gross) : '-'}</div>
+                  </div>
+                  <div className="flex-1 p-1 border-r border-black">
+                    <div className="text-gray-700">FGTS do Mês</div>
+                    <div className="font-bold text-black mt-1">
+                      {formData.footerFgts ? formatCurrency(autoFgtsAmount) : '-'}
+                    </div>
+                  </div>
+                  <div className="flex-1 p-1 border-r border-black">
+                    <div className="text-gray-700">Base Cálc. IRRF</div>
+                    <div className="font-bold text-black mt-1">{formData.footerIrrf ? formatCurrency(totals.gross - autoInssAmount) : '-'}</div>
+                  </div>
+                  <div className="flex-1 p-1">
+                    <div className="text-gray-700">Faixa IRRF</div>
+                    <div className="font-bold text-black mt-1">{formData.footerIrrf && formData.irrfPercent ? `${formData.irrfPercent}%` : '-'}</div>
+                  </div>
+                </div>
+
+                {/* ASSINATURA */}
+                <div className="flex border-t border-black p-2 items-end h-[50px]">
+                   <div className="w-1/2 text-[10px]">Data: ___/___/_______</div>
+                   <div className="w-1/2 flex flex-col items-center justify-end">
+                       <div className="w-[85%] border-t border-black text-center text-[10px] pt-1">Assinatura do Funcionário</div>
+                   </div>
+                </div>
+              </div>
+            );
+          };
+
+          if (isLoading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white"><Loader2 className="animate-spin mr-3 w-8 h-8"/> <span className="font-bold text-lg tracking-wide">Carregando Sistema...</span></div>;
+
+          return (
+            <div className="min-h-screen flex">
+              {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+              
+              <Sidebar />
+              
+              <main className="flex-1 p-8 overflow-y-auto bg-slate-50 print:bg-white print:p-0 custom-scrollbar relative">
+                
+                {/* --- ABA: EMITIR HOLERITE --- */}
+                {activeTab === 'form' && (
+                  <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+                    <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                      <h2 className="text-2xl font-bold mb-8 text-slate-800 flex items-center gap-3 border-b border-slate-100 pb-4">
+                        <FileText className="text-blue-600 w-7 h-7" /> Emissão de Holerite
+                      </h2>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Empresa Empregadora</label>
+                          <select className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all cursor-pointer font-medium" 
+                            value={formData.companyId}
+                            onChange={e => {
+                              const c = companies.find(x => x.id === e.target.value);
+                              if(c) setFormData({...formData, companyId: c.id, companyName: c.name, companyCnpj: c.cnpj, employeeId: ''});
+                            }}>
+                            <option value="">Selecione a empresa...</option>
+                            {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Funcionário</label>
+                          <select className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all cursor-pointer font-medium"
+                            value={formData.employeeId}
+                            disabled={!formData.companyId}
+                            onChange={e => {
+                              const val = e.target.value;
+                              if (val === 'avulso') {
+                                setFormData({...formData, employeeId: 'avulso', employeeName: '', employeeCpf: '', employeeRole: ''});
+                              } else {
+                                const f = employees.find(x => x.id === val);
+                                if(f) setFormData({...formData, employeeId: f.id, employeeName: f.name, employeeCpf: f.cpf, employeeRole: f.role});
+                                else setFormData({...formData, employeeId: '', employeeName: '', employeeCpf: '', employeeRole: ''});
+                              }
+                            }}>
+                            <option value="">{formData.companyId ? 'Selecione o colaborador...' : 'Selecione a empresa 1º'}</option>
+                            {employees.filter(e => e.companyId === formData.companyId).map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                            {formData.companyId && <option value="avulso" className="font-bold text-blue-600">❖ AVULSO / FREELANCER (Digitar Manualmente)</option>}
+                          </select>
+                        </div>
+                        
+                        {/* Se for Avulso, mostra os campos extras para preencher os dados manualmente */}
+                        {formData.employeeId === 'avulso' && (
+                          <div className="col-span-1 md:col-span-2 mt-2 mb-2 p-5 bg-blue-50/50 border border-blue-100 rounded-xl grid grid-cols-1 md:grid-cols-3 gap-5 animate-fade-in">
+                            <div className="md:col-span-3 pb-2 border-b border-blue-100/50">
+                                <p className="text-xs font-bold text-blue-800 uppercase flex items-center gap-2"><Users size={14}/> Preencher Dados do Trabalhador Avulso</p>
+                            </div>
+                            <div className="md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nome Completo</label>
+                              <input type="text" value={formData.employeeName} onChange={e => setFormData({...formData, employeeName: e.target.value})} className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none uppercase transition-all shadow-sm" placeholder="Nome do Trabalhador" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">CPF (Opcional)</label>
+                              <input type="text" value={formData.employeeCpf} onChange={e => setFormData({...formData, employeeCpf: e.target.value})} className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm" placeholder="000.000.000-00" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Cargo / Serviço (Opcional)</label>
+                              <input type="text" value={formData.employeeRole} onChange={e => setFormData({...formData, employeeRole: e.target.value})} className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none uppercase transition-all shadow-sm" placeholder="Ex: Prestador de Serviços" />
+                            </div>
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Mês de Referência</label>
+                          <input type="text" placeholder="Ex: Abril/2026" className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
+                            value={formData.referenceMonth} onChange={e => setFormData({...formData, referenceMonth: e.target.value})} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Data Emissão</label>
+                          <input type="date" value={formData.issueDate} className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
+                            onChange={e => setFormData({...formData, issueDate: e.target.value})} />
+                        </div>
+                        <div className="col-span-1 md:col-span-2 mt-2 flex items-center gap-4 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+                          <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer select-none">
+                            <input type="checkbox" checked={formData.includeNumber} onChange={e => setFormData({...formData, includeNumber: e.target.checked})} className="w-4 h-4 text-blue-600 rounded cursor-pointer" />
+                            Incluir Número do Holerite
+                          </label>
+                          {formData.includeNumber && (
+                            <input type="text" value={formData.payslipNumber} onChange={e => setFormData({...formData, payslipNumber: e.target.value})} className="w-32 p-2 text-sm border border-slate-300 rounded-lg uppercase font-bold focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm" placeholder="001-2026" />
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Bloco de Vencimentos */}
+                        <div className="bg-emerald-50/40 p-6 rounded-2xl border border-emerald-100/60 shadow-sm">
+                          <h3 className="font-bold text-emerald-800 mb-5 flex justify-between items-center text-lg">
+                            Vencimentos <button onClick={() => setFormData({...formData, earnings: [...formData.earnings, {id: generateId(), description:'', reference:'', amount:''}]})} className="bg-emerald-600 hover:bg-emerald-700 text-white p-1.5 rounded-lg transition-all shadow-sm"><Plus size={18}/></button>
+                          </h3>
+                          {formData.earnings.map((item, index) => (
+                            <div key={item.id} className="flex gap-2 mb-3">
+                              <input list="e-list" placeholder="Descrição" className="flex-1 p-2.5 text-sm rounded-xl border border-emerald-200 focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none uppercase transition-all font-medium text-slate-700" 
+                                value={item.description} onChange={e => setFormData({...formData, earnings: formData.earnings.map(x => x.id === item.id ? {...x, description: e.target.value} : x)})} />
+                              <input placeholder="Ref" className="w-16 p-2.5 text-sm rounded-xl border border-emerald-200 focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all text-center" 
+                                value={item.reference} onChange={e => setFormData({...formData, earnings: formData.earnings.map(x => x.id === item.id ? {...x, reference: e.target.value} : x)})} />
+                              <input type="text" placeholder="R$ 0,00" className="w-28 p-2.5 text-sm rounded-xl border border-emerald-200 focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all font-semibold" 
+                                value={item.amount} onChange={e => setFormData({...formData, earnings: formData.earnings.map(x => x.id === item.id ? {...x, amount: e.target.value} : x)})} />
+                              <button onClick={() => setFormData({...formData, earnings: formData.earnings.filter(x => x.id !== item.id)})} className="text-emerald-400 hover:text-red-500 transition-colors p-2"><Trash2 size={18}/></button>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Bloco de Descontos */}
+                        <div className="bg-rose-50/40 p-6 rounded-2xl border border-rose-100/60 shadow-sm">
+                          <h3 className="font-bold text-rose-800 mb-5 flex justify-between items-center text-lg">
+                            Descontos <button onClick={() => setFormData({...formData, deductions: [...formData.deductions, {id: generateId(), description:'', reference:'', amount:''}]})} className="bg-rose-600 hover:bg-rose-700 text-white p-1.5 rounded-lg transition-all shadow-sm"><Plus size={18}/></button>
+                          </h3>
+                          
+                          {/* Descontos Manuais */}
+                          {formData.deductions.map(item => (
+                            <div key={item.id} className="flex gap-2 mb-3">
+                              <input list="d-list" placeholder="Descrição" className="flex-1 p-2.5 text-sm rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 focus:bg-white outline-none uppercase transition-all font-medium text-slate-700" 
+                                value={item.description} onChange={e => setFormData({...formData, deductions: formData.deductions.map(x => x.id === item.id ? {...x, description: e.target.value} : x)})} />
+                              <input placeholder="Ref" className="w-16 p-2.5 text-sm rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 focus:bg-white outline-none transition-all text-center" 
+                                value={item.reference} onChange={e => setFormData({...formData, deductions: formData.deductions.map(x => x.id === item.id ? {...x, reference: e.target.value} : x)})} />
+                              <input type="text" placeholder="R$ 0,00" className="w-28 p-2.5 text-sm rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 focus:bg-white outline-none transition-all font-semibold" 
+                                value={item.amount} onChange={e => setFormData({...formData, deductions: formData.deductions.map(x => x.id === item.id ? {...x, amount: e.target.value} : x)})} />
+                              <button onClick={() => setFormData({...formData, deductions: formData.deductions.filter(x => x.id !== item.id)})} className="text-rose-400 hover:text-red-500 transition-colors p-2"><Trash2 size={18}/></button>
+                            </div>
+                          ))}
+                          
+                          {/* Feedback Visual dos Descontos Automáticos (INSS/IRRF) do Rodapé */}
+                          {formData.footerInss && formData.inssPercent && (
+                            <div className="flex gap-2 mb-3 opacity-80 bg-rose-100/50 p-1.5 rounded-xl border border-rose-200 pointer-events-none">
+                              <input value="INSS (Automático)" readOnly className="flex-1 p-2 text-sm bg-transparent font-medium text-rose-800 outline-none" />
+                              <input value={`${formData.inssPercent}%`} readOnly className="w-16 p-2 text-sm bg-transparent text-center text-rose-800 outline-none" />
+                              <input value={formatCurrency(autoInssAmount).replace('R$', '').trim()} readOnly className="w-28 p-2 text-sm bg-transparent font-bold text-rose-800 outline-none" />
+                              <div className="w-9"></div>
+                            </div>
+                          )}
+                          {formData.footerIrrf && formData.irrfPercent && (
+                            <div className="flex gap-2 mb-3 opacity-80 bg-rose-100/50 p-1.5 rounded-xl border border-rose-200 pointer-events-none">
+                              <input value="IRRF (Automático)" readOnly className="flex-1 p-2 text-sm bg-transparent font-medium text-rose-800 outline-none" />
+                              <input value={`${formData.irrfPercent}%`} readOnly className="w-16 p-2 text-sm bg-transparent text-center text-rose-800 outline-none" />
+                              <input value={formatCurrency(autoIrrfAmount).replace('R$', '').trim()} readOnly className="w-28 p-2 text-sm bg-transparent font-bold text-rose-800 outline-none" />
+                              <div className="w-9"></div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* CONFIGURAÇÃO DO RODAPÉ (IMPOSTOS) */}
+                      <div className="mt-8 bg-slate-50/50 border border-slate-200 p-6 rounded-2xl">
+                        <h3 className="font-bold text-slate-700 mb-5 text-sm flex items-center gap-2 uppercase tracking-wide"><Calculator size={18} className="text-blue-500"/> Impostos e Bases de Cálculo (Rodapé do Holerite)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                            <label className="flex items-center gap-2 font-bold text-sm text-slate-800 cursor-pointer select-none">
+                              <input type="checkbox" checked={formData.footerInss} onChange={e => setFormData({...formData, footerInss: e.target.checked})} className="w-4 h-4 text-blue-600 rounded cursor-pointer" />
+                              INSS
+                            </label>
+                            {formData.footerInss ? <input type="text" placeholder="Inserir %" value={formData.inssPercent} onChange={e => setFormData({...formData, inssPercent: e.target.value})} className="p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-semibold" /> : <div className="text-xs text-slate-400 italic bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-center">Será impresso com hífen (-)</div>}
+                          </div>
+                          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                            <label className="flex items-center gap-2 font-bold text-sm text-slate-800 cursor-pointer select-none">
+                              <input type="checkbox" checked={formData.footerFgts} onChange={e => setFormData({...formData, footerFgts: e.target.checked})} className="w-4 h-4 text-blue-600 rounded cursor-pointer" />
+                              FGTS
+                            </label>
+                            {formData.footerFgts ? <input type="text" placeholder="Inserir %" value={formData.fgtsPercent} onChange={e => setFormData({...formData, fgtsPercent: e.target.value})} className="p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-semibold" /> : <div className="text-xs text-slate-400 italic bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-center">Será impresso com hífen (-)</div>}
+                          </div>
+                          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                            <label className="flex items-center gap-2 font-bold text-sm text-slate-800 cursor-pointer select-none">
+                              <input type="checkbox" checked={formData.footerIrrf} onChange={e => setFormData({...formData, footerIrrf: e.target.checked})} className="w-4 h-4 text-blue-600 rounded cursor-pointer" />
+                              IRRF
+                            </label>
+                            {formData.footerIrrf ? <input type="text" placeholder="Inserir %" value={formData.irrfPercent} onChange={e => setFormData({...formData, irrfPercent: e.target.value})} className="p-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-semibold" /> : <div className="text-xs text-slate-400 italic bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-center">Será impresso com hífen (-)</div>}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-8 flex flex-col md:flex-row items-center justify-between p-6 md:p-8 bg-slate-900 text-white rounded-2xl shadow-xl gap-6">
+                        <div>
+                          <p className="text-xs text-blue-300 uppercase font-bold tracking-widest mb-1">Valor Líquido a Receber</p>
+                          <p className="text-4xl font-extrabold tracking-tight">{formatCurrency(totals.net)}</p>
+                        </div>
+                        <button onClick={handleSavePayslip} className="w-full md:w-auto bg-blue-600 hover:bg-blue-500 px-8 py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-3 shadow-[0_0_20px_rgba(37,99,235,0.4)] hover:shadow-[0_0_25px_rgba(59,130,246,0.6)]">
+                          <Printer size={22}/> Gerar e Imprimir
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* --- ABA: IMPRESSÃO/PREVIEW --- */}
+                {activeTab === 'preview' && (
+                  <div className="max-w-4xl mx-auto print:max-w-none animate-fade-in pb-12">
+                    <div className="flex justify-between items-center mb-8 print:hidden bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                       <button onClick={() => { setActiveTab('form'); window.scrollTo(0,0); }} className="text-slate-600 flex items-center gap-2 font-bold hover:text-slate-900 transition-colors px-4 py-2 rounded-xl hover:bg-slate-50"><ArrowLeft size={18}/> Voltar e Editar</button>
+                       <div className="flex gap-3">
+                         <button onClick={() => {
+                            setFormData(prev => ({
+                              ...prev, id: '', includeNumber: true,
+                              employeeId: '', employeeName: '', employeeCpf: '', employeeRole: '',
+                              earnings: [{ id: generateId(), description: '', reference: '', amount: '' }],
+                              deductions: [{ id: generateId(), description: '', reference: '', amount: '' }]
+                            }));
+                            setActiveTab('form');
+                            window.scrollTo(0,0);
+                         }} className="border-2 border-blue-100 text-blue-700 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-50 hover:border-blue-200 transition-all"><Plus size={18}/> Novo Holerite</button>
+                         <button onClick={() => window.print()} className="bg-blue-600 text-white px-8 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-blue-700 transition-all hover:shadow-xl"><Printer size={18}/> Imprimir / PDF</button>
+                       </div>
+                    </div>
+                    
+                    <div className="bg-white p-8 shadow-2xl rounded-sm print:p-0 print:shadow-none print:bg-transparent transition-all">
+                      <ExcelPayslip type="empresa" />
+                      <div className="my-6 border-t-[1.5px] border-dashed border-gray-400 relative flex justify-center print:my-[6mm]">
+                        <div className="absolute top-[-11px] bg-white px-4 text-[10px] text-gray-500 flex items-center gap-2 font-bold uppercase tracking-widest"><Scissors size={14} className="text-gray-400"/> Linha de Corte</div>
+                      </div>
+                      <ExcelPayslip type="funcionario" />
+                    </div>
+                  </div>
+                )}
+
+                {/* --- ABA: HISTÓRICO --- */}
+                {activeTab === 'history' && (
+                  <div className="max-w-5xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 p-8 animate-fade-in pb-12">
+                     <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-4">
+                       <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3"><History className="text-blue-600 w-7 h-7" /> Histórico de Emissões <span className="bg-slate-100 text-slate-600 py-1 px-3 rounded-full text-sm">{history.length}</span></h2>
+                       <button onClick={exportToExcel} disabled={history.length === 0} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all shadow-sm">
+                         <Download className="w-4 h-4" /> Exportar CSV
+                       </button>
+                     </div>
+                     <div className="overflow-x-auto rounded-xl border border-slate-100">
+                       <table className="w-full text-left">
+                         <thead>
+                           <tr className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                             <th className="py-4 px-5">Nº</th>
+                             <th className="py-4 px-5">Funcionário</th>
+                             <th className="py-4 px-5">Ref.</th>
+                             <th className="py-4 px-5 text-right">Líquido</th>
+                             <th className="py-4 px-5 text-center w-28">Ações</th>
+                           </tr>
+                         </thead>
+                         <tbody>
+                           {history.length === 0 ? (
+                              <tr><td colSpan="5" className="text-center py-16 text-slate-400 font-medium">Nenhum holerite emitido ou salvo na nuvem ainda.</td></tr>
+                           ) : history.map(h => (
+                             <tr key={h.id} className="border-b border-slate-100 last:border-0 hover:bg-blue-50/50 transition-colors">
+                               <td className="py-4 px-5 font-bold text-blue-700">{h.includeNumber ? h.payslipNumber : '-'}</td>
+                               <td className="py-4 px-5 font-semibold text-slate-800">{h.employeeName}</td>
+                               <td className="py-4 px-5 text-sm text-slate-500">{h.referenceMonth}</td>
+                               <td className="py-4 px-5 text-right font-bold text-slate-800">{formatCurrency(h.totals?.net)}</td>
+                               <td className="py-4 px-5 text-center flex justify-center gap-2">
+                                 <button onClick={() => {setFormData(h); setActiveTab('preview'); window.scrollTo(0,0);}} className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Ver ou Imprimir"><Printer size={18}/></button>
+                                 <button onClick={() => deletePayslip(h.id)} className="p-2 text-red-500 hover:bg-red-100 rounded-lg transition-colors" title="Excluir"><Trash2 size={18}/></button>
+                               </td>
+                             </tr>
+                           ))}
+                         </tbody>
+                       </table>
+                     </div>
+                  </div>
+                )}
+
+                {/* --- ABA: EMPRESAS --- */}
+                {activeTab === 'companies' && renderCompanies()}
+
+                {/* --- ABA: FUNCIONÁRIOS --- */}
+                {activeTab === 'employees' && renderEmployees()}
+
+              </main>
+
+              <datalist id="e-list">{rubricsE.map(r => <option key={r} value={r}/>)}</datalist>
+              <datalist id="d-list">{rubricsD.map(r => <option key={r} value={r}/>)}</datalist>
+            </div>
+          );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
