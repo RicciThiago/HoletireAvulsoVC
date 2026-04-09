@@ -23,16 +23,30 @@
     </script>
 
     <style>
-        /* Estilos de Impressão (A4) - Mantém o padrão Excel intacto */
+        /* Estilos de Impressão (A4) - Mantém o padrão Excel intacto e Blindado */
         @media print {
-            @page { size: A4 portrait; margin: 10mm; }
-            body { background-color: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            @page { size: A4 portrait; margin: 8mm; }
+            body { background-color: white !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             .print\:hidden { display: none !important; }
             .print\:shadow-none { box-shadow: none !important; }
             .print\:p-0 { padding: 0 !important; }
             .print\:m-0 { margin: 0 !important; }
             .break-inside-avoid { break-inside: avoid; }
             ::-webkit-scrollbar { display: none; }
+            
+            /* Força a largura exata de um A4 para não desconfigurar em outros PCs */
+            .a4-container {
+                width: 190mm !important;
+                max-width: 190mm !important;
+                margin: 0 auto !important;
+            }
+        }
+
+        /* Container padrão para centralizar na tela antes de imprimir */
+        .a4-container {
+            width: 100%;
+            max-width: 190mm;
+            margin: 0 auto;
         }
         
         /* Animação suave para os Toasts (Notificações) */
@@ -176,11 +190,9 @@
           const allDeductions = useMemo(() => {
               let list = [...formData.deductions.filter(d => d.description || d.amount)];
               if (formData.footerInss && formData.inssPercent) {
-                  // Passamos a descrição limpa "INSS" para constar corretamente na impressão
                   list.push({ id: 'auto-inss', description: 'INSS', reference: `${formData.inssPercent}%`, amount: autoInssAmount });
               }
               if (formData.footerIrrf && formData.irrfPercent) {
-                  // Passamos a descrição limpa "IRRF" para constar corretamente na impressão
                   list.push({ id: 'auto-irrf', description: 'IRRF', reference: `${formData.irrfPercent}%`, amount: autoIrrfAmount });
               }
               return list;
@@ -545,25 +557,25 @@
             </div>
           );
 
-          // --- MODELO DE IMPRESSÃO ESTILO EXCEL (A4) ---
+          // --- MODELO DE IMPRESSÃO ESTILO EXCEL (A4) COM BLINDAGEM DE LAYOUT ---
           const ExcelPayslip = ({ type }) => {
-            // Procura nos vencimentos se há algum com a palavra "BASE" para jogar no rodapé. Senão, usa o bruto.
             const baseEarning = formData.earnings.find(e => e.description && e.description.toUpperCase().includes('BASE'));
             const salarioBase = baseEarning ? parseBrFloat(baseEarning.amount) : totals.gross;
             
-            // Variáveis de checagem para omitir cabeçalhos dinamicamente se estiverem em branco
             const hasRole = Boolean(formData.employeeRole && formData.employeeRole.trim() !== '');
             const hasCpf = Boolean(formData.employeeCpf && formData.employeeCpf.trim() !== '');
 
+            // Adicionado font-family strict para garantir que textos não empurrem colunas em navegadores diferentes
             return (
-              <div className="border-[1.5px] border-black p-0 bg-white text-black font-sans text-[11px] mb-4 break-inside-avoid">
+              <div className="border-[1.5px] border-black p-0 bg-white text-black text-[11px] mb-4 break-inside-avoid w-full box-border" style={{ fontFamily: 'Arial, Helvetica, sans-serif' }}>
+                
                 {/* CABEÇALHO */}
-                <div className="flex border-b border-black">
-                  <div className="w-2/3 p-2 border-r border-black">
+                <div className="flex flex-nowrap border-b border-black">
+                  <div className="w-2/3 p-2 border-r border-black flex-shrink-0">
                     <div className="font-bold text-sm uppercase">{formData.companyName || 'NOME DA EMPRESA'}</div>
                     <div className="mt-1">CNPJ / CPF: {formData.companyCnpj || '00.000.000/0000-00'}</div>
                   </div>
-                  <div className="w-1/3 p-2 text-right bg-gray-50 flex flex-col justify-center">
+                  <div className="w-1/3 p-2 text-right bg-gray-50 flex flex-col justify-center flex-shrink-0">
                     <div className="font-bold uppercase">Recibo de Pagamento</div>
                     <div className="mt-1">Ref: <span className="font-bold">{formData.referenceMonth || 'Mês/Ano'}</span></div>
                     {formData.includeNumber && formData.payslipNumber && (
@@ -573,33 +585,33 @@
                 </div>
 
                 {/* FUNCIONÁRIO - CABEÇALHOS CONDICIONAIS */}
-                <div className="flex border-b border-black bg-gray-50/50 text-[9px]">
-                  <div className={`p-1 text-gray-700 flex-1 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>Nome do Funcionário</div>
+                <div className="flex flex-nowrap border-b border-black bg-gray-50/50 text-[9px]">
+                  <div className={`p-1 text-gray-700 flex-1 flex-shrink-0 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>Nome do Funcionário</div>
                   {hasRole && (
-                    <div className={`p-1 text-gray-700 w-[30%] ${hasCpf ? 'border-r border-black' : ''}`}>CBO / Cargo</div>
+                    <div className={`p-1 text-gray-700 w-[30%] flex-shrink-0 ${hasCpf ? 'border-r border-black' : ''}`}>CBO / Cargo</div>
                   )}
                   {hasCpf && (
-                    <div className="p-1 text-gray-700 w-[20%]">CPF</div>
+                    <div className="p-1 text-gray-700 w-[20%] flex-shrink-0">CPF</div>
                   )}
                 </div>
                 {/* FUNCIONÁRIO - VALORES CONDICIONAIS */}
-                <div className="flex border-b border-black font-bold">
-                  <div className={`p-1 uppercase flex-1 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeName || 'NOME DO FUNCIONÁRIO'}</div>
+                <div className="flex flex-nowrap border-b border-black font-bold">
+                  <div className={`p-1 uppercase flex-1 flex-shrink-0 ${hasRole || hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeName || 'NOME DO FUNCIONÁRIO'}</div>
                   {hasRole && (
-                    <div className={`p-1 uppercase w-[30%] ${hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeRole}</div>
+                    <div className={`p-1 uppercase w-[30%] flex-shrink-0 ${hasCpf ? 'border-r border-black' : ''}`}>{formData.employeeRole}</div>
                   )}
                   {hasCpf && (
-                    <div className="p-1 uppercase w-[20%]">{formData.employeeCpf}</div>
+                    <div className="p-1 uppercase w-[20%] flex-shrink-0">{formData.employeeCpf}</div>
                   )}
                 </div>
 
                 {/* TABELA DE VERBAS E DESCONTOS */}
-                <div className="flex border-b border-black font-bold text-center bg-gray-100 text-[10px]">
-                  <div className="w-[10%] p-1 border-r border-black">Cód.</div>
-                  <div className="w-[50%] p-1 border-r border-black text-left">Descrição</div>
-                  <div className="w-[10%] p-1 border-r border-black">Ref.</div>
-                  <div className="w-[15%] p-1 border-r border-black">Vencimentos</div>
-                  <div className="w-[15%] p-1">Descontos</div>
+                <div className="flex flex-nowrap border-b border-black font-bold text-center bg-gray-100 text-[10px]">
+                  <div className="w-[10%] p-1 border-r border-black flex-shrink-0">Cód.</div>
+                  <div className="w-[50%] p-1 border-r border-black text-left flex-shrink-0">Descrição</div>
+                  <div className="w-[10%] p-1 border-r border-black flex-shrink-0">Ref.</div>
+                  <div className="w-[15%] p-1 border-r border-black flex-shrink-0">Vencimentos</div>
+                  <div className="w-[15%] p-1 flex-shrink-0">Descontos</div>
                 </div>
 
                 <div className="h-[140px] relative">
@@ -613,12 +625,12 @@
                        desc = desc.split(' - ').slice(1).join(' - ');
                     }
                     return (
-                      <div key={`e-${i}`} className="flex text-[10px]">
-                        <div className="w-[10%] px-1 border-r border-black text-center">{code}</div>
-                        <div className="w-[50%] px-1 border-r border-black uppercase">{desc}</div>
-                        <div className="w-[10%] px-1 border-r border-black text-center">{e.reference}</div>
-                        <div className="w-[15%] px-1 border-r border-black text-right">{formatCurrency(parseBrFloat(e.amount)).replace('R$', '')}</div>
-                        <div className="w-[15%] px-1"></div>
+                      <div key={`e-${i}`} className="flex flex-nowrap text-[10px]">
+                        <div className="w-[10%] px-1 border-r border-black text-center flex-shrink-0">{code}</div>
+                        <div className="w-[50%] px-1 border-r border-black uppercase flex-shrink-0">{desc}</div>
+                        <div className="w-[10%] px-1 border-r border-black text-center flex-shrink-0">{e.reference}</div>
+                        <div className="w-[15%] px-1 border-r border-black text-right flex-shrink-0">{formatCurrency(parseBrFloat(e.amount)).replace('R$', '')}</div>
+                        <div className="w-[15%] px-1 flex-shrink-0"></div>
                       </div>
                     )
                   })}
@@ -628,7 +640,6 @@
                     let desc = d.description;
                     let code = (i+50).toString().padStart(3, '0');
                     
-                    // Garante que os automáticos tenham código padrão se não preenchido
                     if (d.id === 'auto-inss') code = '060';
                     if (d.id === 'auto-irrf') code = '061';
 
@@ -637,79 +648,79 @@
                        desc = desc.split(' - ').slice(1).join(' - ');
                     }
                     return (
-                      <div key={`d-${i}`} className="flex text-[10px]">
-                        <div className="w-[10%] px-1 border-r border-black text-center">{code}</div>
-                        <div className="w-[50%] px-1 border-r border-black uppercase">{desc}</div>
-                        <div className="w-[10%] px-1 border-r border-black text-center">{d.reference}</div>
-                        <div className="w-[15%] px-1 border-r border-black"></div>
-                        <div className="w-[15%] px-1 text-right">{formatCurrency(parseBrFloat(d.amount)).replace('R$', '')}</div>
+                      <div key={`d-${i}`} className="flex flex-nowrap text-[10px]">
+                        <div className="w-[10%] px-1 border-r border-black text-center flex-shrink-0">{code}</div>
+                        <div className="w-[50%] px-1 border-r border-black uppercase flex-shrink-0">{desc}</div>
+                        <div className="w-[10%] px-1 border-r border-black text-center flex-shrink-0">{d.reference}</div>
+                        <div className="w-[15%] px-1 border-r border-black flex-shrink-0"></div>
+                        <div className="w-[15%] px-1 text-right flex-shrink-0">{formatCurrency(parseBrFloat(d.amount)).replace('R$', '')}</div>
                       </div>
                     )
                   })}
                   
-                  {/* Linhas verticais fixas */}
+                  {/* Linhas verticais fixas calculadas rigorosamente */}
                   <div className="absolute top-0 left-[10%] bottom-0 w-[50%] border-l border-r border-black pointer-events-none"></div>
                   <div className="absolute top-0 left-[70%] bottom-0 w-[15%] border-r border-black pointer-events-none"></div>
                 </div>
 
                 {/* TOTAIS */}
-                <div className="flex border-t border-black font-bold">
-                  <div className="w-[70%] p-1 border-r border-black text-right text-[10px] pt-2">Total de Vencimentos / Descontos</div>
-                  <div className="w-[15%] p-1 border-r border-black text-right pt-2 bg-gray-50">{formatCurrency(totals.gross).replace('R$', '')}</div>
-                  <div className="w-[15%] p-1 text-right pt-2 bg-gray-50">{formatCurrency(totals.deductions).replace('R$', '')}</div>
+                <div className="flex flex-nowrap border-t border-black font-bold">
+                  <div className="w-[70%] p-1 border-r border-black text-right text-[10px] pt-2 flex-shrink-0">Total de Vencimentos / Descontos</div>
+                  <div className="w-[15%] p-1 border-r border-black text-right pt-2 bg-gray-50 flex-shrink-0">{formatCurrency(totals.gross).replace('R$', '')}</div>
+                  <div className="w-[15%] p-1 text-right pt-2 bg-gray-50 flex-shrink-0">{formatCurrency(totals.deductions).replace('R$', '')}</div>
                 </div>
 
                 {/* MENSAGEM E LÍQUIDO */}
-                <div className="flex border-t border-black h-12">
-                  <div className="w-[70%] p-2 border-r border-black flex flex-col justify-center">
+                <div className="flex flex-nowrap border-t border-black h-12">
+                  <div className="w-[70%] p-2 border-r border-black flex flex-col justify-center flex-shrink-0">
                     <div className="text-[9px] text-gray-700">Mensagem:</div>
                     <div className="text-xs italic font-semibold">{type === 'empresa' ? 'Via da Empresa' : 'Via do Funcionário'}</div>
                   </div>
-                  <div className="w-[30%] flex flex-col">
-                     <div className="flex border-b border-black h-1/2 items-center bg-gray-100">
-                        <div className="w-1/2 p-1 text-[10px] font-bold">Valor Líquido ⇨</div>
-                        <div className="w-1/2 p-1 text-right font-bold text-sm">{formatCurrency(totals.net)}</div>
+                  <div className="w-[30%] flex flex-col flex-shrink-0">
+                     <div className="flex flex-nowrap border-b border-black h-1/2 items-center bg-gray-100">
+                        <div className="w-1/2 p-1 text-[10px] font-bold flex-shrink-0">Valor Líquido ⇨</div>
+                        <div className="w-1/2 p-1 text-right font-bold text-sm flex-shrink-0">{formatCurrency(totals.net)}</div>
                      </div>
-                     <div className="flex h-1/2 p-1 items-center justify-end">
+                     <div className="flex flex-nowrap h-1/2 p-1 items-center justify-end">
                          <span className="text-[8px] text-gray-500 px-1">Declaro ter recebido a importância líquida discriminada</span>
                      </div>
                   </div>
                 </div>
 
-                {/* BASES DE CÁLCULO (RODAPÉ CONFIGURÁVEL COM VÍRGULAS) */}
-                <div className="flex border-t border-black text-[9px] text-center bg-gray-50">
-                  <div className="flex-1 p-1 border-r border-black">
+                {/* BASES DE CÁLCULO (RODAPÉ ATUALIZADO) */}
+                <div className="flex flex-nowrap border-t border-black text-[9px] text-center bg-gray-50">
+                  <div className="flex-1 p-1 border-r border-black flex flex-col justify-between">
                     <div className="text-gray-700">Salário Base</div>
                     <div className="font-bold text-black mt-1">{formatCurrency(salarioBase)}</div>
                   </div>
-                  <div className="flex-1 p-1 border-r border-black">
+                  <div className="flex-1 p-1 border-r border-black flex flex-col justify-between">
                     <div className="text-gray-700">Base Cálc. INSS</div>
                     <div className="font-bold text-black mt-1">{formData.footerInss ? formatCurrency(totals.gross) : '-'}</div>
                   </div>
-                  <div className="flex-1 p-1 border-r border-black">
+                  <div className="flex-1 p-1 border-r border-black flex flex-col justify-between">
                     <div className="text-gray-700">Base Cálc. FGTS</div>
                     <div className="font-bold text-black mt-1">{formData.footerFgts ? formatCurrency(totals.gross) : '-'}</div>
                   </div>
-                  <div className="flex-1 p-1 border-r border-black">
+                  <div className="flex-1 p-1 border-r border-black flex flex-col justify-between">
                     <div className="text-gray-700">FGTS do Mês</div>
                     <div className="font-bold text-black mt-1">
                       {formData.footerFgts ? formatCurrency(autoFgtsAmount) : '-'}
                     </div>
                   </div>
-                  <div className="flex-1 p-1 border-r border-black">
+                  <div className="flex-1 p-1 border-r border-black flex flex-col justify-between">
                     <div className="text-gray-700">Base Cálc. IRRF</div>
                     <div className="font-bold text-black mt-1">{formData.footerIrrf ? formatCurrency(totals.gross - autoInssAmount) : '-'}</div>
                   </div>
-                  <div className="flex-1 p-1">
+                  <div className="flex-1 p-1 flex flex-col justify-between">
                     <div className="text-gray-700">Faixa IRRF</div>
                     <div className="font-bold text-black mt-1">{formData.footerIrrf && formData.irrfPercent ? `${formData.irrfPercent}%` : '-'}</div>
                   </div>
                 </div>
 
                 {/* ASSINATURA */}
-                <div className="flex border-t border-black p-2 items-end h-[50px]">
-                   <div className="w-1/2 text-[10px]">Data: ___/___/_______</div>
-                   <div className="w-1/2 flex flex-col items-center justify-end">
+                <div className="flex flex-nowrap border-t border-black p-2 items-end h-[50px]">
+                   <div className="w-1/2 text-[10px] flex-shrink-0">Data: ___/___/_______</div>
+                   <div className="w-1/2 flex flex-col items-center justify-end flex-shrink-0">
                        <div className="w-[85%] border-t border-black text-center text-[10px] pt-1">Assinatura do Funcionário</div>
                    </div>
                 </div>
@@ -912,8 +923,8 @@
 
                 {/* --- ABA: IMPRESSÃO/PREVIEW --- */}
                 {activeTab === 'preview' && (
-                  <div className="max-w-4xl mx-auto print:max-w-none animate-fade-in pb-12">
-                    <div className="flex justify-between items-center mb-8 print:hidden bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="w-full print:w-auto pb-12 print:pb-0">
+                    <div className="max-w-4xl mx-auto flex justify-between items-center mb-8 print:hidden bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
                        <button onClick={() => { setActiveTab('form'); window.scrollTo(0,0); }} className="text-slate-600 flex items-center gap-2 font-bold hover:text-slate-900 transition-colors px-4 py-2 rounded-xl hover:bg-slate-50"><ArrowLeft size={18}/> Voltar e Editar</button>
                        <div className="flex gap-3">
                          <button onClick={() => {
@@ -930,7 +941,8 @@
                        </div>
                     </div>
                     
-                    <div className="bg-white p-8 shadow-2xl rounded-sm print:p-0 print:shadow-none print:bg-transparent transition-all">
+                    {/* CONTAINER BLINDADO COM LARGURA A4 EXATA */}
+                    <div className="a4-container bg-white p-8 shadow-2xl rounded-sm print:p-0 print:shadow-none print:bg-transparent">
                       <ExcelPayslip type="empresa" />
                       <div className="my-6 border-t-[1.5px] border-dashed border-gray-400 relative flex justify-center print:my-[6mm]">
                         <div className="absolute top-[-11px] bg-white px-4 text-[10px] text-gray-500 flex items-center gap-2 font-bold uppercase tracking-widest"><Scissors size={14} className="text-gray-400"/> Linha de Corte</div>
